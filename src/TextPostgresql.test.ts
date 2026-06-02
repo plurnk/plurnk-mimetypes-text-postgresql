@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import TextPostgresql from "./TextPostgresql.ts";
 
 const metadata = {
-    mimetype: "text/x-postgresql-sql",
+    mimetype: "text/x-pgsql",
     glyph: "🐘",
     extensions: [".sql", ".pgsql"] as const,
 };
@@ -11,7 +11,7 @@ const metadata = {
 describe("TextPostgresql — instantiation", () => {
     it("instantiates with metadata", () => {
         const h = new TextPostgresql(metadata);
-        assert.equal(h.mimetype, "text/x-postgresql-sql");
+        assert.equal(h.mimetype, "text/x-pgsql");
         assert.equal(h.glyph, "🐘");
     });
 });
