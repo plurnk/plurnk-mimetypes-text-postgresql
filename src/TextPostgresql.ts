@@ -53,6 +53,15 @@ class TextPostgresqlVisitor extends withExtractor(PostgreSQLParserVisitor) {
             const colName = pgNameText(colid);
             if (colName) this.addSymbol("field", colName, ctx);
         }
+        // Foreign keys are cross-table dependencies: this table USES every
+        // REFERENCES target. FK targets live inside constraint contexts (both
+        // the inline Colconstraint... form and the table-level Constraintelem
+        // form), never as the createstmt's own direct qualified_name child, so
+        // there is no self-reference. container = the table being created.
+        for (const fk of collectFkTargets(ctx)) {
+            const fkName = pgNameText(fk);
+            if (fkName) this.addRef("use", fkName, fk as never, { container: tableName });
+        }
         return null;
     };
 
@@ -61,6 +70,9 @@ class TextPostgresqlVisitor extends withExtractor(PostgreSQLParserVisitor) {
         const qns = collectChildren(ctx, "qualified_name");
         const name = pgNameText(qns[0]);
         if (name) this.addSymbol("class", name, ctx);
+        // A view USES every table its SELECT reads — the core SQL graph edge
+        // (view → use → source tables). container = the view being created.
+        if (name) this.refRelations(ctx, name);
         return null;
     };
 
@@ -71,16 +83,13 @@ class TextPostgresqlVisitor extends withExtractor(PostgreSQLParserVisitor) {
         // The index_name is either an `index_name_` rule or a bare `name`
         // alternative — fall back to walking for the first identifier child.
         const inn = ctx.index_name_?.();
-        if (inn) {
-            const txt = pgNameText(inn);
-            if (txt) this.addSymbol("field", txt, ctx);
-            return null;
-        }
-        const nameNode = ctx.name?.();
-        if (nameNode) {
-            const txt = pgNameText(nameNode);
-            if (txt) this.addSymbol("field", txt, ctx);
-        }
+        const nameNode = inn ?? ctx.name?.();
+        const name = pgNameText(nameNode);
+        if (name) this.addSymbol("field", name, ctx);
+        // An index attaches to its ON table (a single Relation_exprContext).
+        const onTable = ctx.relation_expr?.();
+        const onName = pgNameText(onTable);
+        if (name && onName) this.addRef("use", onName, onTable, { container: name });
         return null;
     };
 
@@ -90,6 +99,12 @@ class TextPostgresqlVisitor extends withExtractor(PostgreSQLParserVisitor) {
         const names = collectChildren(ctx, "name");
         const name = pgNameText(names[0]);
         if (name) this.addSymbol("method", name, ctx);
+        // A trigger fires ON a table. Postgres trigger bodies are a separate
+        // EXECUTE FUNCTION call (no inline SQL touching tables), so the only
+        // table edge is the ON target (the createtrigstmt's qualified_name).
+        const onTable = ctx.qualified_name?.();
+        const onName = pgNameText(onTable);
+        if (name && onName) this.addRef("use", onName, onTable, { container: name });
         return null;
     };
 
@@ -143,6 +158,43 @@ class TextPostgresqlVisitor extends withExtractor(PostgreSQLParserVisitor) {
         if (name) this.addSymbol("type", name, ctx);
         return null;
     };
+
+    // Emit a `use` ref for every table reference under `ctx`, owned by the
+    // created object `container`. In the postgres grammar every FROM/JOIN
+    // table source is a Relation_exprContext wrapping the table's
+    // qualified_name. The view's own name is a direct Qualified_nameContext
+    // (not a Relation_expr), so it never self-references. CAVEAT: a CTE name
+    // referenced downstream (WITH x ... FROM x) also parses as a
+    // Relation_expr; distinguishing it from a real table would require scope
+    // analysis, so such a ref would be a (rare) false positive — accepted as
+    // the inherent SQL ambiguity, mirroring the sqlite handler.
+    private refRelations(ctx: unknown, container: string): void {
+        for (const rel of findDescendants(ctx, "Relation_exprContext")) {
+            const tableName = pgNameText(rel);
+            if (tableName) this.addRef("use", tableName, rel as never, { container });
+        }
+    }
+}
+
+// Collect the qualified_name of every FOREIGN KEY ... REFERENCES target in a
+// createstmt. FK targets live inside ColconstraintelemContext (inline
+// `col REFERENCES t`) and ConstraintelemContext (table-level `FOREIGN KEY ...
+// REFERENCES t`); both contain exactly the REFERENCES target qualified_name.
+// The createstmt's own table name is a direct qualified_name child of the
+// createstmt — never inside a constraint elem — so this never self-references.
+function collectFkTargets(ctx: unknown): unknown[] {
+    const out: unknown[] = [];
+    const elems = [
+        ...findDescendants(ctx, "ColconstraintelemContext"),
+        ...findDescendants(ctx, "ConstraintelemContext"),
+    ];
+    for (const elem of elems) {
+        const text = (elem as { getText?: () => string }).getText?.() ?? "";
+        if (!/REFERENCES/i.test(text)) continue;
+        const qn = findDescendants(elem, "Qualified_nameContext")[0];
+        if (qn) out.push(qn);
+    }
+    return out;
 }
 
 function pgNameText(ctx: unknown): string | null {
