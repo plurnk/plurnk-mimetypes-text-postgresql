@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { assertHandlerConformance } from "@plurnk/plurnk-mimetypes/conformance";
 import TextPostgresql from "./TextPostgresql.ts";
 
 const h = () =>
@@ -66,5 +67,21 @@ describe("text/x-pgsql references (ANTLR refs grind)", () => {
         assert.ok(defNames.has("public.users") && defNames.has("orders"));
         // A def's own name never appears as a ref (no self-reference).
         assert.ok(!refs.some((r) => r.name === r.container));
+    });
+
+    it("passes the SPEC §16 conformance harness", async () => {
+        await assertHandlerConformance(h(), {
+            source: SQL,
+            decoyNames: ["StringDecoy", "CommentDecoy"],
+            expectJoins: [
+                { refName: "public.users", container: "active_orders" },
+                { refName: "orders", container: "active_orders" },
+                { refName: "public.users", container: "orders" },
+            ],
+            expectRefs: [
+                { name: "public.users", kind: "use" },
+                { name: "orders", kind: "use" },
+            ],
+        });
     });
 });
