@@ -1,6 +1,6 @@
 {
     "name": "@plurnk/plurnk-mimetypes-text-postgresql",
-    "version": "0.4.5",
+    "version": "0.4.6",
     "description": "text/x-pgsql mimetype handler for plurnk-service. ANTLR-backed extraction via grammars-v4.",
     "type": "module",
     "license": "MIT",
